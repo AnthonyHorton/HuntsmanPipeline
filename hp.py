@@ -22,9 +22,11 @@ def default_conf(path=''):
            given will write to current working directory.
     '''
     config = configparser.ConfigParser()
-    config['paths'] = {'raw_data': '/mnt/data/HuntsmanEye/raw', \
-                       'red_data': '/mnt/data/HuntsmanEye/red'}
-    config['camera'] = {'bias_exptime': '0.09'}
+    config['paths'] = {'raw_data':'/mnt/data/HuntsmanEye/raw', \
+                       'red_data':'/mnt/data/HuntsmanEye/red'}
+    config['camera'] = {'gain':'0.37', \
+                        'overscan_rows':'30',
+                        'bias_exptime':'0.09'}
     with open(os.path.join(path, 'hp.conf'), 'w') as configfile:
         config.write(configfile)
 
@@ -175,6 +177,33 @@ def categorise_fits(config, fname, path=''):
             warnings.warn("Guessing that FITS file '{}' is a light frame!".format(fname), \
                           RuntimeWarning)
             return 'LIGHT'
+
+def make_red_dir(config, raw_dir):
+    red_dir = os.path.join(config['paths']['red_data'], \
+                           os.path.relpath(raw_dir, config['paths']['raw_data']))
+    if not os.path.exists(red_dir):
+        os.makedirs(red_dir)
+    return red_dir
+
+def process_bias(config, fname, raw_dir):
+    bias = ccdproc.CCDData.read(os.path.join(raw_dir, fname), unit="adu")
+    bias = ccdproc.trim_image(bias[int(config['camera']['overscan_rows']):])
+    bias = ccdproc.gain_correct(bias, float(config['camera']['gain']), \
+                                gain_unit="electron/adu")
+    return bias
+
+def process_biases(config, bias_files):
+    for dir_listing in bias_files:
+        raw_dir = dir_listing[0]
+        red_dir = make_red_dir(config, raw_dir)
+        combiner = ccdproc.Combiner([process_bias(config, fname, raw_dir) \
+                                     for fname in dir_listing[1]])
+        median_bias = combiner.median_combine()
+        ccdproc.CCDData.write(median_bias, os.path.join(red_dir, 'median_bias.fits'), clobber=True)
+
+        
+        
+
 
 #if __name__ == "__main__":
     
