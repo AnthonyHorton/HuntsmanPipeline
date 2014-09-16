@@ -46,7 +46,7 @@ def read_conf(fname='hp.conf'):
 
 fits_pattern = re.compile('\.fits?$', flags=re.IGNORECASE)
 
-def find_fits(dir, config):
+def find_fits(config, dir=False):
     '''
     Convenience function to find all the FITS files within a given directory
     and its subdirectories (if any).  Uses filename extension to identify FITS 
@@ -58,81 +58,123 @@ def find_fits(dir, config):
 
     Arguments:
 
-    dir - path of directory in which to search of FITS files
+    config - configparser.ConfigParser object containing pipeline config
+    dir - optional, path of directory in which to search of FITS files, if
+          nor given will use raw data directory from config
 
     Returns:
 
-    fits_files - list of 2-tuples, the first element of the tuple is a 
-                 string containing the path of the directory or subdirectory, 
-                 the second element is a list of filenames of the FITS files
-                 within that (sub)directory.
+    bias_files, dark_files, flat_files, light_files, unknown_files - 
+             lists of 2-tuples, the first element of the tuple is a 
+             string containing the path of the directory or subdirectory, 
+             the second element is a list of filenames of the FITS files
+             within that (sub)directory.
 
     Note: does not follow symbolic links into other directory trees (limitation
     of os.walk()).
     '''
-    fits_files = []
-    for dir_listing in os.walk(dir):
-        fits_fnames = [(categorise_fits(fname, dir_listing[0], config['camera']), fname) \
-                       for fname in dir_listing[2] if re.search(fits_pattern, fname)]
-        if len(fits_fnames) != 0:
-            fits_files.append((dir_listing[0], fits_fnames))
+    if not dir:
+        dir = config['paths']['raw_data']
 
-    return fits_files
+    bias_files = []
+    dark_files = []
+    flat_files = []
+    light_files = []
+    unknown_files = []
+
+    for dir_listing in os.walk(dir):
+        bias_list = []
+        dark_list = []
+        flat_list = []
+        light_list = []
+        unknown_list = []
+        for fname in dir_listing[2]:
+            if re.search(fits_pattern, fname):
+                category = categorise_fits(config, fname, dir_listing[0])
+                if category == 'BIAS':
+                    bias_list.append(fname)
+                elif category == 'DARK':
+                    dark_list.append(fname)
+                elif category == 'FLAT':
+                    flat_list.append(fname)
+                elif category == 'LIGHT':
+                    light_list.append(fname)
+                elif category == 'UNKNOWN':
+                    unknown_list.append(fname)
+                else:
+                    raise ValueError(category)
+        if len(bias_list) != 0:
+            bias_files.append((dir_listing[0], bias_list))
+        if len(dark_list) != 0:
+            dark_files.append((dir_listing[0], dark_list))
+        if len(flat_list) != 0:
+            flat_files.append((dir_listing[0], flat_list))
+        if len(light_list) != 0:
+            light_files.append((dir_listing[0], light_list))
+        if len(unknown_list) != 0:
+            unknown_files.append((dir_listing[0], unknown_list))
+
+    return bias_files, dark_files, flat_files, light_files, unknown_files
 
 bias_pattern = re.compile('bias', flags=re.IGNORECASE)
 dark_pattern = re.compile('dark', flags=re.IGNORECASE)
 flat_pattern = re.compile('flat', flags=re.IGNORECASE)
 
-def categorise_fits(fname, path, config_camera):
+def categorise_fits(config, fname, path=''):
     header = astropy.io.fits.getheader(os.path.join(path, fname))
     try:
-        exptime = header['EXPTIME']
-        try:
-            imagetyp = header['IMAGETYP']
-            if imagetyp == 'BIAS' or imagetyp == 'Bias Frame':
-                # Definitely a bias frame
-                return 'BIAS'
-            elif imagetyp == 'DARK' or imagetyp == 'Dark Frame':
-                # Probably a dark frame, but should check exposure time
-                if exptime <= float(config_camera['bias_exptime']):
+        imagetyp = header['IMAGETYP']
+        if imagetyp == 'BIAS' or imagetyp == 'Bias Frame':
+            # Definitely a bias frame
+            return 'BIAS'
+        elif imagetyp == 'DARK' or imagetyp == 'Dark Frame':
+            # Probably a dark frame, but should check exposure time
+            try:
+                if header['EXPTIME'] <= float(config['camera']['bias_exptime']):
                     # Dark frame but with minimum exposure time, this is a bias frame really
                     return 'BIAS'
                 else:
                     return 'DARK'
-            elif imagetyp == 'FLAT' or imagetyp == 'Flat Field':
-                # Definitely some sort of flat. Twilight, sky, dome, etc?
-                return 'FLAT'
-            elif imagetyp =='LIGHT' or imagetyp == 'Light Frame':
-                return 'LIGHT'
-            else:
-                # Has an IMAGETYP header entry but doesn't conform to IRAF or SBIGFITSEXT
-                # conventions.
-                warnings.warn("FITS file '{}' has unrecognised IMAGETYP '{}'!".format(fname, imagetyp), UserWarning)
+            except KeyError:
+                warnings.warn("FITS file '{}' has no EXPTIME header entry!".format(fname), \
+                              RuntimeWarning)
                 return 'UNKNOWN'
-        except KeyError:
-            # No IMAGETYP header entry, will guess based on filename.
-            if re.search(bias_pattern, fname):
-                # Probably a bias frame...
-                return 'BIAS'
-            elif re.search(dark_pattern, fname):
-                # Probably a dark...
-                if exptime <= float(config_camera['bias_exptime']):
+        elif imagetyp == 'FLAT' or imagetyp == 'Flat Field':
+            # Definitely some sort of flat. Twilight, sky, dome, etc?
+            return 'FLAT'
+        elif imagetyp =='LIGHT' or imagetyp == 'Light Frame':
+            return 'LIGHT'
+        else:
+            # Has an IMAGETYP header entry but doesn't conform to IRAF or SBIGFITSEXT
+            # conventions.
+            warnings.warn("FITS file '{}' has unrecognised IMAGETYP '{}'!".format(fname, imagetyp), \
+                          RuntimeWarning)
+            return 'UNKNOWN'
+    except KeyError:
+        # No IMAGETYP header entry, will guess based on filename.
+        if re.search(bias_pattern, fname):
+            # Probably a bias frame...
+            return 'BIAS'
+        elif re.search(dark_pattern, fname):
+            # Probably a dark...
+            try:
+                if header['EXPTIME'] <= float(config['camera']['bias_exptime']):
                     # Dark frame but with minimum exposure time, this is a bias frame really
                     return 'BIAS'
                 else:
                     return 'DARK'
-            elif re.search(flat_pattern, fname):
-                # Probably some sort of flat.
-                return 'FLAT'
-            else:
-                # None of the above, more likely than not a light frame.
-                warnings.warn("Guessing that FITS file '{}' is a light frame!".format(fname), \
-                              UserWarning)
-                return 'LIGHT'
-    except KeyError:
-        # No EXPTIME header entry! WTH?
-        warnings.warn("FITS file '{}' has no EXPTIME header entry!".format(fname), UserWarning)
-        return 'UNKNOWN'
+            except KeyError:
+                warnings.warn("FITS file '{}' has no EXPTIME header entry!".format(fname), \
+                              RuntimeWarning)
+                return 'UNKNOWN'
+        elif re.search(flat_pattern, fname):
+            # Probably some sort of flat.
+            return 'FLAT'
+        else:
+            # None of the above, more likely than not a light frame.
+            warnings.warn("Guessing that FITS file '{}' is a light frame!".format(fname), \
+                          RuntimeWarning)
+            return 'LIGHT'
 
 #if __name__ == "__main__":
     
