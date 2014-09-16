@@ -102,7 +102,7 @@ def find_fits(config, dir=False):
                 elif category == 'UNKNOWN':
                     unknown_list.append(fname)
                 else:
-                    raise ValueError(category)
+                    raise ValueError("Received unexpected category '{}' from categorise_fits()!".format(category))
         if len(bias_list) != 0:
             bias_files.append((dir_listing[0], bias_list))
         if len(dark_list) != 0:
