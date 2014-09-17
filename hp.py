@@ -12,6 +12,8 @@ import configparser
 import re
 import warnings
 
+config = None
+
 def default_conf(path=''):
     '''
     Creates config file 'hp.conf' with default config
@@ -21,14 +23,14 @@ def default_conf(path=''):
     path - optional, path to directory to write the config file to. If not
            given will write to current working directory.
     '''
-    config = configparser.ConfigParser()
-    config['paths'] = {'raw_data':'/mnt/data/HuntsmanEye/raw', \
+    dconfig = configparser.ConfigParser()
+    dconfig['paths'] = {'raw_data':'/mnt/data/HuntsmanEye/raw', \
                        'red_data':'/mnt/data/HuntsmanEye/red'}
-    config['camera'] = {'gain':'0.37', \
+    dconfig['camera'] = {'gain':'0.37', \
                         'overscan_rows':'30',
                         'bias_exptime':'0.09'}
-    with open(os.path.join(path, 'hp.conf'), 'w') as configfile:
-        config.write(configfile)
+    with open(os.path.join(path, 'hp.conf'), 'w') as dconfigfile:
+        dconfig.write(dconfigfile)
 
 def read_conf(fname='hp.conf'):
     '''
@@ -42,13 +44,14 @@ def read_conf(fname='hp.conf'):
 
     config - configparser.ConfigParser object
     '''
+    global config
     config = configparser.ConfigParser()
     config.read(fname)
     return config
 
 fits_pattern = re.compile('\.fits?$', flags=re.IGNORECASE)
 
-def find_fits(config, dir=False):
+def find_fits(dir=False):
     '''
     Convenience function to find all the FITS files within a given directory
     and its subdirectories (if any).  Uses filename extension to identify FITS 
@@ -92,7 +95,7 @@ def find_fits(config, dir=False):
         unknown_list = []
         for fname in dir_listing[2]:
             if re.search(fits_pattern, fname):
-                category = categorise_fits(config, fname, dir_listing[0])
+                category = categorise_fits(fname, dir_listing[0])
                 if category == 'BIAS':
                     bias_list.append(fname)
                 elif category == 'DARK':
@@ -122,7 +125,7 @@ bias_pattern = re.compile('bias', flags=re.IGNORECASE)
 dark_pattern = re.compile('dark', flags=re.IGNORECASE)
 flat_pattern = re.compile('flat', flags=re.IGNORECASE)
 
-def categorise_fits(config, fname, path=''):
+def categorise_fits(fname, path=''):
     header = astropy.io.fits.getheader(os.path.join(path, fname))
     try:
         imagetyp = header['IMAGETYP']
@@ -142,13 +145,13 @@ def categorise_fits(config, fname, path=''):
                               RuntimeWarning)
                 return 'UNKNOWN'
         elif imagetyp == 'FLAT' or imagetyp == 'Flat Field':
-            # Definitely some sort of flat. Twilight, sky, dome, etc?
+            # Definitely some sort of flat. Twilight, sky, dome?
             return 'FLAT'
         elif imagetyp =='LIGHT' or imagetyp == 'Light Frame':
             return 'LIGHT'
         else:
             # Has an IMAGETYP header entry but doesn't conform to IRAF or SBIGFITSEXT
-            # conventions.
+            # conventions. No idea what this is.
             warnings.warn("FITS file '{}' has unrecognised IMAGETYP '{}'!".format(fname, imagetyp), \
                           RuntimeWarning)
             return 'UNKNOWN'
@@ -178,26 +181,25 @@ def categorise_fits(config, fname, path=''):
                           RuntimeWarning)
             return 'LIGHT'
 
-def make_red_dir(config, raw_dir):
+def make_red_dir(raw_dir):
     red_dir = os.path.join(config['paths']['red_data'], \
                            os.path.relpath(raw_dir, config['paths']['raw_data']))
     if not os.path.exists(red_dir):
         os.makedirs(red_dir)
     return red_dir
 
-def process_bias(config, fname, raw_dir):
+def process_bias(fname, raw_dir):
     bias = ccdproc.CCDData.read(os.path.join(raw_dir, fname), unit="adu")
     bias = ccdproc.trim_image(bias[int(config['camera']['overscan_rows']):])
     bias = ccdproc.gain_correct(bias, float(config['camera']['gain']), \
                                 gain_unit="electron/adu")
     return bias
 
-def process_biases(config, bias_files):
+def process_biases(bias_files):
     for dir_listing in bias_files:
         raw_dir = dir_listing[0]
-        red_dir = make_red_dir(config, raw_dir)
-        combiner = ccdproc.Combiner([process_bias(config, fname, raw_dir) \
-                                     for fname in dir_listing[1]])
+        red_dir = make_red_dir(raw_dir)
+        combiner = ccdproc.Combiner([process_bias(fname, raw_dir) for fname in dir_listing[1]])
         median_bias = combiner.median_combine()
         ccdproc.CCDData.write(median_bias, os.path.join(red_dir, 'median_bias.fits'), clobber=True)
 
